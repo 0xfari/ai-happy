@@ -35,6 +35,31 @@ def output_directory() -> Path:
     return Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 
 
+def jpeg_dimensions(data: bytes) -> tuple[int, int]:
+    """Read width/height from the JPEG's Start-of-Frame segment.
+
+    Walks the marker segments after SOI until a SOF0/SOF2 marker is
+    found; its payload carries precision (1 byte) then height and
+    width (2 bytes each, big-endian). Raises ValueError if no SOF
+    segment is found, so a truncated payload fails loudly.
+    """
+    pos = 2  # past the SOI marker
+    while pos + 9 <= len(data):
+        if data[pos] != 0xFF:
+            raise ValueError("corrupt JPEG marker stream")
+        marker = data[pos + 1]
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            pos += 2
+            continue
+        size = int.from_bytes(data[pos + 2:pos + 4], "big")
+        if marker in (0xC0, 0xC2):  # SOF0 / SOF2
+            height = int.from_bytes(data[pos + 5:pos + 7], "big")
+            width = int.from_bytes(data[pos + 7:pos + 9], "big")
+            return width, height
+        pos += 2 + size
+    raise ValueError("no JPEG Start-of-Frame segment found")
+
+
 def load_image_bytes() -> bytes:
     """Decode the stored artwork and sanity-check it is a JPEG."""
     source = Path(__file__).resolve().parent / SOURCE_NAME
@@ -42,6 +67,10 @@ def load_image_bytes() -> bytes:
     data = base64.b64decode(text, validate=True)
     if not data.startswith(JPEG_SOI):
         raise ValueError("decoded payload is not a JPEG (bad SOI marker)")
+    width, height = jpeg_dimensions(data)
+    if width > 1024 or height > 1024:
+        raise ValueError(f"image is {width}x{height}, over the 1024x1024 limit")
+    print(f"decoded JPEG {width}x{height} ({len(data)} bytes)")
     return data
 
 
